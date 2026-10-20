@@ -1,0 +1,66 @@
+name: Deploy website
+on:
+  push:
+    branches: [main]
+    paths: ['web/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: Verify prepared template
+        run: python3 -m unittest discover -s tests -p test_web_template.py
+      - uses: actions/configure-pages@v5
+      - name: Configure base path
+        env:
+          CUSTOM_BASE_PATH: ${{ vars.BASE_PATH }}
+        run: |
+          repo="${GITHUB_REPOSITORY#*/}"
+          if [ -n "$CUSTOM_BASE_PATH" ]; then
+            echo "BASE_PATH=$CUSTOM_BASE_PATH" >> "$GITHUB_ENV"
+          elif [[ "$repo" == *.github.io ]]; then
+            echo 'BASE_PATH=/' >> "$GITHUB_ENV"
+          else
+            echo "BASE_PATH=/$repo/" >> "$GITHUB_ENV"
+          fi
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+        env:
+          BASE_PATH: /
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-results
+          path: web/test-results
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: web/dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment
